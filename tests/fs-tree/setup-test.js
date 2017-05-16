@@ -29,7 +29,7 @@ describe('FSTree setup', function() {
 
   describe('.fromPaths', function() {
     it('creates empty trees', function() {
-      fsTree = FSTree.fromPaths([ ]);
+      fsTree = FSTree.fromPaths([]);
       expect(fsTree.size).to.eq(0);
     });
 

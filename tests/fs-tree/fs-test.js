@@ -175,27 +175,14 @@ describe('FSTree fs abstraction', function() {
         })).to.have.property('srcTree', true);
       });
 
-      it('is false for chdir projections', function() {
+      it('matches parent value for projections', () => {
         tree = new FSTree({
           root: ROOT,
           srcTree: true,
         });
-        tree._ensureEntriesPopulated();
-        expect(tree.srcTree).to.be.true;
-        expect(tree.chdir('my-directory').srcTree).to.be.false;
-        // projection does not affect parent
-        expect(tree.srcTree).to.be.true;
-      });
 
-      it('is false for filtered projections', function() {
-        tree = new FSTree({
-          root: ROOT,
-          srcTree: true,
-        });
-        expect(tree.srcTree).to.be.true;
-        expect(tree.filtered({ include: ['**/*'] }).srcTree).to.be.false;
-        // projection does not affect parent
-        expect(tree.srcTree).to.be.true;
+        expect(tree.filtered({ files: ['hello.txt']}).srcTree).to.be.true;
+        expect(tree2.filtered({ files: ['hello.txt']}).srcTree).to.be.false;
       });
     });
 
@@ -1273,11 +1260,16 @@ describe('FSTree fs abstraction', function() {
 
       it('can chdir into projections', function() {
         tree.mkdirSync('my-directory/foo');
+        tree.writeFileSync('my-directory/foo/bar.js', 'let bar;');
         tree2.symlinkSyncFromEntry(tree, 'my-directory', 'abc');
 
         const rootedTree2 = tree2.chdir('abc/foo');
 
         expect(rootedTree2.cwd).to.equal('abc/foo/');
+        debugger;
+        expect(rootedTree2.walkPaths()).to.deep.equal([
+          'bar.js',
+        ]);
       });
 
       describe('when path does not exist', function() {
