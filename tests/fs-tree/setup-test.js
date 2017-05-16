@@ -63,7 +63,7 @@ describe('FSTree setup', function() {
             'bar/b.js',
           ], { sortAndExpand: true });
 
-          expect(fsTree.entries.map(e => e.relativePath)).to.deep.equal([
+          expect(fsTree.walkPaths()).to.deep.equal([
             'bar',
             'bar/b.js',
             'foo',
@@ -77,7 +77,7 @@ describe('FSTree setup', function() {
             'a/b/c/d/foo.js',
           ], { sortAndExpand: true });
 
-          expect(fsTree.entries).to.deep.equal([
+          expect(fsTree._rawEntries).to.deep.equal([
             directory('a/'),
             directory('a/b/'),
             directory('a/b/c/'),
@@ -218,7 +218,7 @@ describe('FSTree setup', function() {
 
         fsTree.addEntries([file('b.js', { size: 1, mtime: 1 })]);
 
-        expect(fsTree.entries.map(e => e.relativePath)).to.deep.equal([
+        expect(fsTree.walkPaths()).to.deep.equal([
           'a.js',
           'b.js',
           'foo',
@@ -241,7 +241,7 @@ describe('FSTree setup', function() {
           file('foo/bip/img.jpg'),
         ], {sortAndExpand: true});
 
-        expect(fsTree.entries.map(e => e.relativePath)).to.deep.equal([
+        expect(fsTree.walkPaths()).to.deep.equal([
           '1.js',
           'a.js',
           'bar',
@@ -262,16 +262,16 @@ describe('FSTree setup', function() {
           'foo/a.js',
         ]);
 
-        expect(fsTree.entries[2].mtime).to.equal(0);
+        expect(fsTree._rawEntries[2].mtime).to.equal(0);
 
         fsTree.addEntries([file('foo/a.js', { size: 10, mtime: 10 })], {sortAndExpand: true});
 
-        expect(fsTree.entries.map(e => e.relativePath)).to.deep.equal([
+        expect(fsTree.walkPaths()).to.deep.equal([
           'a.js',
           'foo',
           'foo/a.js',
         ]);
-        expect(fsTree.entries[2].mtime).to.equal(10);
+        expect(fsTree._rawEntries[2].mtime).to.equal(10);
       });
     });
 
@@ -291,7 +291,7 @@ describe('FSTree setup', function() {
           'foo/bip/img.jpg'
         ], {sortAndExpand: true});
 
-        expect(fsTree.entries.map(e => e.relativePath)).to.deep.equal([
+        expect(fsTree.walkPaths()).to.deep.equal([
           '1.js',
           'a.js',
           'bar',

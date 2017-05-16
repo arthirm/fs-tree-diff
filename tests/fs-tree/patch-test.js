@@ -36,8 +36,8 @@ describe('FSTree patch', function() {
     });
 
     context('from an empty tree', function() {
-      beforeEach( function() {
-        fsTree = new FSTree();
+      beforeEach(function() {
+        fsTree = FSTree.fromPaths([]);
       });
 
       context('to an empty tree', function() {
