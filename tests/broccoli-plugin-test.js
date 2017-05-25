@@ -45,8 +45,19 @@ Object.defineProperty(NewPlugin.prototype, 'in', {
       var lastTree = this._lastInTree || FSTree.fromEntries([]);
       var inputPath = this.inputPaths[0];
       var entries = walkSync.entries(inputPath, this.inputWalkOptions);
+      // console.log("inputpath ");
+      // console.log(inputPath)
       tree = this._lastInTree = FSTree.fromEntries(entries, { root: inputPath });
-      tree.__changes = lastTree.calculatePatch(tree);
+      // console.log("-- lastTree.root--- ");
+      // console.log(lastTree.root)
+     // console.log(tree);
+     // console.log(lastTree);
+      tree._rawChanges = lastTree.calculatePatch(tree);
+    //  console.log(tree);
+
+  //    console.log("tree changes");
+   //   console.log(tree.__changes);
+  //    console.log(this.out);
     }
 
     return this._in || (this._in = tree);
@@ -56,7 +67,8 @@ Object.defineProperty(NewPlugin.prototype, 'in', {
 Object.defineProperty(NewPlugin.prototype, 'out', {
   get: function() {
     if (this._out) { return this._out; }
-
+      // console.log("outputPath ");
+      // console.log(this.outputPath)
     var tree = FSTree.fromEntries([], { root: this.outputPath });
 
     return this._out || (this._out = tree);
@@ -74,7 +86,6 @@ A.prototype.constructor = A;
 A.prototype.build = function() {
   var plugin = this;
   this.out.start(); // TODO: broccoli should call this;
-
   // this, or output patcher
   return mapSeries(this.in.changes(), function(change) {
     var operation = change[0];
@@ -93,7 +104,7 @@ A.prototype.build = function() {
     }
   }).finally(function() {
     plugin.out.stop(); // TODO: broccoli should call this;
-  });
+});
 };
 
 function Filter(nodes, options) {
@@ -105,11 +116,18 @@ Filter.prototype = Object.create(NewPlugin.prototype);
 Filter.prototype.constructor = Filter;
 Filter.prototype.build = function() {
   var plugin = this;
+
+  console.log("filter build");
+
   this.out.start(); // TODO: broccoli should call this;
   return mapSeries(this.in.changes(), function(change) {
     var operation = change[0];
     var relativePath = change[1];
     var entry = change[2];
+
+    console.log("filter change");
+    console.log(change);
+
 
     switch(operation) {
       case 'create': return plugin.processFile(relativePath, entry);
@@ -163,11 +181,12 @@ Concat.prototype.build = function() {
   var output = '';
 
   this.out.start(); // TODO: should be in base-class;
-
+console.log("concat build");
   this.in.changes().forEach(function(change) {
     var operation = change[0];
     var relativePath  = change[1];
 
+  console.log("change in concat")
     switch (operation) {
       case 'create': return this.create(relativePath);
       case 'change': return this.update(relativePath);
@@ -228,14 +247,17 @@ describe('BroccoliPlugins', function() {
 
     var a = new A([INPUT_PATH]);
     var b = new A([a]);
+    // console.log("INPUT_PATH");
+    // console.log(INPUT_PATH);
 
     var builder = new Builder(b);
 
     return builder.build().then(function(result) {
-      expect(a._inWasPolyfilled).to.eql(true);
-      expect(b._inWasPolyfilled).to.eql(false);
-
+      // expect(a._inWasPolyfilled).to.eql(true);
+      // expect(b._inWasPolyfilled).to.eql(false);
+      debugger;
       expect(fs.readFileSync(result.directory + '/input.txt', 'UTF8')).to.eql('hello, world!')
+   // });
       var changes = a.out.changes();
       expect(changes).to.have.deep.property('0.0', 'create');
       expect(changes).to.have.deep.property('0.1', 'input.txt');

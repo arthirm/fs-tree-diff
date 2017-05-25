@@ -15,8 +15,78 @@ function mapBy(array, property) {
   });
 }
 
+/** Creates an FSTree by walking a root directory. */
+function treeFromDisk(root, srcTree) {
+  return new FSTree({
+    entries: walkSync.entries(root),
+    root,
+    srcTree,
+  });
+}
+
+function applyChanges(changes, outTree) {
+  changes.forEach(function(change) {
+    var operation = change[0];
+    var relativePath = change[1];
+    var entry = change[2];
+    const inputFilePath = entry.tree.resolvePath(entry.relativePath);
+
+    switch (operation) {
+      case 'mkdir':     {
+        if (entry.linkDir) {
+          return outTree.symlinkSyncFromEntry(entry.tree, relativePath, relativePath);
+        } else {
+          return outTree.mkdirSync(relativePath);
+        }
+      }
+      case 'rmdir':   {
+        if (entry.linkDir) {
+          return outTree.unlinkSync(relativePath);
+        } else {
+          return outTree.rmdirSync(relativePath);
+        }
+      }
+      case 'unlink':  {
+        return outTree.unlinkSync(relativePath);
+      }
+      case 'create':    {
+        return outTree.symlinkSync(inputFilePath, relativePath);
+      }
+      case 'change':    {
+        if (entry.isDirectory()) {
+          if (entry.linkDir) {
+            outTree.rmdirSync(relativePath);
+            outTree.symlinkSync(inputFilePath, relativePath , entry.linkDir);
+          } else {
+            outTree.unlinkSync(relativePath);
+            outTree.mkdirSync(relativePath);
+            return
+          }
+        } else {
+          // file changed
+          outTree.unlinkSync(relativePath);
+          return outTree.symlinkSync(inputFilePath, relativePath);
+        }
+
+      }
+    }
+  }, this);
+}
+
 describe('FSMergeTree', function () {
-  let ROOT = path.resolve('tmp/fs-test-root/');
+  const ROOT = path.resolve('tmp/fs-test-root/');
+  // const ROOT2 = path.resolve('tmp/fs-test-root2/');
+  // const ROOT3 = path.resolve('tmp/fs-test-root3/');
+
+  beforeEach(function () {
+    rimraf.sync(ROOT);
+
+    fs.mkdirpSync(ROOT);
+  });
+
+  afterEach(function () {
+    fs.removeSync(ROOT);
+  });
 
   describe('constructor', function () {
     it('supports empty inputs', function () {
@@ -88,17 +158,6 @@ describe('FSMergeTree', function () {
   });
 
   describe('_mergeRelativePaths', function () {
-    let ROOT = __dirname + '/tmp/fixtures';
-
-    beforeEach(function () {
-      rimraf.sync(ROOT);
-      fs.mkdirpSync(ROOT);
-    });
-
-    // afterEach(function () {
-    //   fs.removeSync(ROOT);
-    // });
-
     it('returns an array of file infos', function () {
       fixturify.writeSync(`${ROOT}/a`, {
         bar: {
@@ -257,215 +316,135 @@ describe('FSMergeTree', function () {
       expect(() => mergeTrees._mergeRelativePath(null, '')).to.throw(
         /Merge error: conflicting file types: bar is a directory in .* but a file in .*/);
     });
-
-
-
-    describe('verifies merge and changes function,', function () {
-
-      it('merges directories with same name with one symlinked directory', function () {
-
-        fixturify.writeSync(`${ROOT}/other/vendor1`, {
-          bar: {
-            baz: 'hello',
-          },
-          loader: {
-            foo: 'abc'
-          }
-        });
-
-        fixturify.writeSync(`${ROOT}/other/vendor2`, {
-          abc: 'hello',
-          def: {
-            efg: {
-              hij: 'hello'
-            }
-          }
-        });
-
-        let inTree = new FSTree({
-          root: `${ROOT}`, entries: walkSync.entries(`${ROOT}`),
-        });
-
-        let outTree = new FSTree({
-          root: `${ROOT}/output`,
-        });
-
-        fs.mkdirpSync(ROOT + '/output');
-
-        //Symlinking other/vendor (source)  to a/index (dest)
-
-        outTree.symlinkSyncFromEntry(inTree, `other/vendor1`, 'a/index1');
-
-
-        outTree.symlinkSyncFromEntry(inTree, `other/vendor2`, 'b/index2');
-
-        let intermediateMerge = new FSMergeTree({
-          inputs: [`${ROOT}/output/a`, `${ROOT}/output/b`],
-        });
-
-        //  Merging a , b
-         let changes = intermediateMerge.changes(null);
-         applyChanges(changes, outTree);
-
-        let entries = changes.map(e => {
-          return e[2];
-        });
-
-        let newTree = FSTree.fromEntries(entries);
-
-        fixturify.writeSync(`${ROOT}/base/c`, {
-          rst: 'hello', index2: {
-            lmn: {
-              opq: 'hello'
-            }
-          }
-        });
-
-        let outputMergeTree = new FSMergeTree({
-          inputs: [newTree, `${ROOT}/base/c`],
-        });
-
-        // Merging a and b (symlinked dirs) from previous merge with c. With b and c having 'index2' as one of their child.
-        changes = outputMergeTree.changes(null);
-
-        console.log(changes);
-
-
-        let outTree1 = new FSTree({
-          root: `${ROOT}/output1`,
-        });
-
-        fs.mkdirpSync(ROOT + '/output1');
-
-        // Applying the changes in disk
-        applyChanges(changes, outTree1);
-
-
-
-        expect(fixturify.readSync(`${ROOT}/output1/index2`)).to.eql({ abc: 'hello',
-          def: { efg: { hij: 'hello' } },
-          lmn: { opq: 'hello' } });
-      });
-
-
-
-      it('merges directories with same name with both symlinked directory', function () {
-
-        fixturify.writeSync(`${ROOT}/a`, {
-            baz: 'hello',
-        });
-
-        fixturify.writeSync(`${ROOT}/b`, {
-          bar: 'hello',
-        });
-
-
-        let inTree = new FSTree({
-          root: `${ROOT}`, entries: walkSync.entries(`${ROOT}`),
-        });
-
-
-
-        let tree1 = new FSTree({
-          root: `${ROOT}/output1`,
-        });
-
-        let tree2 = new FSTree({
-          root: `${ROOT}/output2`,
-        });
-
-
-        fs.mkdirpSync(ROOT + '/output1');
-        fs.mkdirpSync(ROOT + '/output2');
-
-        //Symlinking other/vendor (source)  to a/index (dest)
-
-        tree1.symlinkSyncFromEntry(inTree, `a`, 'c');
-        tree2.symlinkSyncFromEntry(inTree, `b`, 'c');
-
-
-
-        let mergeTree = new FSMergeTree({
-          inputs: [tree1, tree2],
-        });
-
-        debugger;
-        // Merging a , b
-        let changes = mergeTree.changes(null);
-        console.log(changes);
-
-
-        let outTree = new FSTree({
-          root: `${ROOT}/output3`,
-        });
-
-        fs.mkdirpSync(ROOT + '/output3');
-
-        // Applying the changes in disk
-        applyChanges(changes, outTree);
-
-        expect(fixturify.readSync(`${ROOT}/output3/`)).to.eql({ c: { bar: 'hello', baz: 'hello' } });
-
-
-    });
   });
 
-});
+  describe('changes', function () {
+    it('merges directories with same name with one symlinked directory', function () {
+      fixturify.writeSync(ROOT, {
+        source: {
+          index: {
+            abc: 'abc',
+            def: 'def',
+          },
+        },
+        in1: {},
+        in2: {
+          index: {
+            ghi: 'ghi',
+            jkl: 'jkl',
+          },
+        },
+        out: {},
+      });
 
+      const sourceTree = treeFromDisk(path.join(ROOT, 'source'));
+      const inTree1 = treeFromDisk(path.join(ROOT, 'in1'));
+      const inTree2 = treeFromDisk(path.join(ROOT, 'in2'));
+      const outTree = treeFromDisk(path.join(ROOT, 'out')); 
 
+      // On one side, index is a symlink.
+      inTree1.symlinkSyncFromEntry(sourceTree, 'index', 'index');
 
-    function applyChanges(changes,  outTree) {
+      const mergedTree = new FSMergeTree({
+        inputs: [inTree1, inTree2],
+      });
 
-    changes.forEach(function(change) {
+      // Applying the changes in disk
+      applyChanges(mergedTree.changes(null), outTree);
 
-      var operation = change[0];
-      var relativePath = change[1];
-      var entry = change[2];
-     // var inputFilePath = entry && entry.basePath + '/' + relativePath;
-      var inputFilePath = entry && entry.absolutePath;
+      expect(fixturify.readSync(`${ROOT}/out`)).to.deep.equal({
+        index: {
+          abc: 'abc',
+          def: 'def',
+          ghi: 'ghi',
+          jkl: 'jkl',
+        },
+      });
+    });
 
+    it('merges directories with same name with both symlinked directory', function () {
+      fixturify.writeSync(ROOT, {
+        source1: {
+          index: {
+            abc: 'abc',
+            def: 'def',
+          },
+        },
+        source2: {
+          index: {
+            ghi: 'ghi',
+            jkl: 'jkl',
+          },
+        },
+        in1: {},
+        in2: {},
+        out: {},
+      });
 
-      switch(operation) {
-        case 'mkdir':     {
-          if (entry.linkDir) {
-            return outTree.symlinkSyncFromEntry(entry._projection.tree, relativePath, relativePath);
-          } else {
-            return outTree.mkdirSync(relativePath);
-          }
-        }
-        case 'rmdir':   {
-          if (entry.linkDir) {
-            return outTree.unlinkSync(relativePath);
-          } else {
-            return outTree.rmdirSync(relativePath);
-          }
-        }
-        case 'unlink':  {
-          return outTree.unlinkSync(relativePath);
-        }
-        case 'create':    {
+      const sourceTree1 = treeFromDisk(path.join(ROOT, 'source1'));
+      const sourceTree2 = treeFromDisk(path.join(ROOT, 'source2'));
+      const inTree1 = treeFromDisk(path.join(ROOT, 'in1'));
+      const inTree2 = treeFromDisk(path.join(ROOT, 'in2'));
+      const outTree = treeFromDisk(path.join(ROOT, 'out')); 
 
-          return outTree.symlinkSync(inputFilePath, relativePath);
-        }
-        case 'change':    {
-          if (entry.isDirectory()) {
-            if (entry.linkDir) {
-              outTree.rmdirSync(relativePath);
-              outTree.symlinkSync(inputFilePath, relativePath , entry.linkDir);
-            } else {
-              outTree.unlinkSync(relativePath);
-              outTree.mkdirSync(relativePath);
-              return
-            }
-          } else {
-            // file changed
-            outTree.unlinkSync(relativePath);
-            return outTree.symlinkSync(inputFilePath, relativePath);
-          }
+      // On both sides, index is a symlink.
+      inTree1.symlinkSyncFromEntry(sourceTree1, 'index', 'index');
+      inTree2.symlinkSyncFromEntry(sourceTree2, 'index', 'index');
 
-        }
-      }
-    }, this);
-  };
+      const mergedTree = new FSMergeTree({
+        inputs: [inTree1, inTree2],
+      });
 
+      // Applying the changes in disk
+      applyChanges(mergedTree.changes(null), outTree);
+
+      expect(fixturify.readSync(`${ROOT}/out`)).to.deep.equal({
+        index: {
+          abc: 'abc',
+          def: 'def',
+          ghi: 'ghi',
+          jkl: 'jkl',
+        },
+      });
+    });
+
+    it('merges symlinks when srcTree is true', () => {
+      fixturify.writeSync(ROOT, {
+        source: {
+          index: {
+            abc: 'abc',
+            def: 'def',
+          },
+        },
+        in1: {},
+        in2: {
+          index: {
+            ghi: 'ghi',
+            jkl: 'jkl',
+          },
+        },
+        out: {},
+      });
+
+      fs.symlinkSync(path.join(ROOT, 'source', 'index'), path.join(ROOT, 'in1', 'index'));
+
+      const outTree = treeFromDisk(path.join(ROOT, 'out')); 
+
+      const mergedTree = new FSMergeTree({
+        inputs: [path.join(ROOT, 'in1'), path.join(ROOT, 'in2')],
+      });
+
+      // Applying the changes in disk
+      applyChanges(mergedTree.changes(null), outTree);
+
+      expect(fixturify.readSync(`${ROOT}/out`)).to.deep.equal({
+        index: {
+          abc: 'abc',
+          def: 'def',
+          ghi: 'ghi',
+          jkl: 'jkl',
+        },
+      });
+    });
+  });
 });

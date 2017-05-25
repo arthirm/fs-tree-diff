@@ -547,12 +547,12 @@ describe('FSTree fs abstraction', function() {
 
       describe('idempotent', function() {
         it('is idempotent files added this session', function() {
-          const old = fs.statSync(tree.root + 'hello.txt');
+          const old = fs.statSync(path.join(tree.root, 'hello.txt'));
           const oldContent = fs.readFileSync(path.join(tree.root, 'hello.txt'));
 
           tree.writeFileSync('hello.txt', oldContent);
 
-          const current = fs.statSync(tree.root + 'hello.txt');
+          const current = fs.statSync(path.join(tree.root, 'hello.txt'));
 
           expect(old.mtime.getTime()).to.equal(current.mtime.getTime());
           expect(old.mode).to.equal(current.mode);
@@ -619,6 +619,7 @@ describe('FSTree fs abstraction', function() {
         tree.writeFileSync('my-directory/bar/baz', 'hello');
         tree2.symlinkSyncFromEntry(tree, 'my-directory', 'b');
 
+        debugger;
         expect(tree2.walkPaths()).to.deep.equal([
           'b',
           'b/bar',
@@ -664,7 +665,7 @@ describe('FSTree fs abstraction', function() {
 
     describe('.symlinkSync', function() {
       it('symlinks files', function() {
-        tree.symlinkSync(`${tree.root}hello.txt`, 'my-link');
+        tree.symlinkSync(path.join(tree.root, 'hello.txt'), 'my-link');
 
         expect(tree.readFileSync('my-link', 'UTF8')).to.equal('Hello, World!\n');
 
@@ -676,9 +677,9 @@ describe('FSTree fs abstraction', function() {
       });
 
       it('tracks a change', function() {
-        tree.symlinkSync(`${tree.root}hello.txt`, 'my-link');
+        tree.symlinkSync(path.join(tree.root, 'hello.txt'), 'my-link');
 
-        expect(tree.symlinkSync(`${tree.root}hello.txt`, 'my-link'));
+        expect(tree.symlinkSync(path.join(tree.root, 'hello.txt'), 'my-link'));
 
         expect(sanitizeChanges(tree._rawChanges)).to.deep.equal(sanitizeChanges([
           ['create', 'my-link'],
@@ -687,18 +688,18 @@ describe('FSTree fs abstraction', function() {
 
       describe('idempotent', function() {
         it('is idempotent files added this session', function() {
-          fs.symlinkSync(`${tree.root}hello.txt`, `${tree.root}hi`);
+          fs.symlinkSync(path.join(tree.root, 'hello.txt'), path.join(tree.root, 'hi'));
 
-          let stat = fs.statSync(`${tree.root}hi`);
-          let entry = new Entry('hi', stat.size, stat.mtime, stat.mode, `${tree.root}hello.txt`);
+          let stat = fs.statSync(path.join(tree.root, 'hi'));
+          let entry = new Entry('hi', stat.size, stat.mtime, stat.mode, path.join(tree.root, 'hello.txt'));
 
           tree.addEntries([entry]);
 
-          let old = fs.statSync(tree.root + 'hi');
+          let old = fs.statSync(path.join(tree.root, 'hi'));
 
-          tree.symlinkSync(`${tree.root}hello.txt`, 'hi');
+          tree.symlinkSync(path.join(tree.root, 'hello.txt'), 'hi');
 
-          let current = fs.statSync(tree.root + 'hi');
+          let current = fs.statSync(path.join(tree.root, 'hi'));
 
           expect(old.mtime.getTime()).to.equal(current.mtime.getTime());
           expect(old).to.have.property('mode', current.mode);
@@ -713,11 +714,11 @@ describe('FSTree fs abstraction', function() {
         });
 
         it('is idempotent across session', function() {
-          tree.symlinkSync(`${tree.root}hello.txt`, 'hejsan');
+          tree.symlinkSync(path.join(tree.root, 'hello.txt'), 'hejsan');
 
           const oldChanges = tree.changes();
 
-          tree.symlinkSync(`${tree.root}hello.txt`, 'hejsan');
+          tree.symlinkSync(path.join(tree.root, 'hello.txt'), 'hejsan');
 
           expect(tree.changes()).to.deep.equal(oldChanges);
         });
@@ -782,6 +783,13 @@ describe('FSTree fs abstraction', function() {
           'hello.txt',
           'my-directory/',
         ]);
+      });
+
+      it('removes symlinked-from-entry directories', () => {
+        tree2.symlinkSyncFromEntry(tree, 'my-directory', 'linked-dir');
+        tree2.unlinkSync('linked-dir');
+
+        expect(tree2.walkPaths()).to.deep.equal([]);
       });
 
       it('throws when stopped', function() {
@@ -1224,6 +1232,16 @@ describe('FSTree fs abstraction', function() {
           'hello.txt',
         ]);
       });
+
+      it('expands symlinks', () => {
+        tree.writeFileSync('my-directory/foo.txt', 'foo');
+        tree2.symlinkSyncFromEntry(tree, 'my-directory', 'bar');
+
+        expect(tree2.walkEntries().map(entry => entry.relativePath)).to.deep.equal([
+          'bar',
+          'bar/foo.txt',
+        ]);
+      });
     });
 
     describe('.chdir', function() {
@@ -1427,7 +1445,7 @@ describe('FSTree fs abstraction', function() {
       it('returns a new tree with filters set', function() {
         expect(tree.include).to.deep.equal([]);
         expect(tree.exclude).to.deep.equal([]);
-        expect(tree.files).to.deep.equal([]);
+        expect(tree.files).to.deep.equal(null);
         expect(tree.cwd).to.equal('');
 
         expect(tree.filtered({ include: ['*.js'] }).include).to.deep.equal(['*.js']);
@@ -1598,6 +1616,7 @@ describe('FSTree fs abstraction', function() {
     });
   });
 
+  // TODO: add tests for setting filters manually on a "root" tree
   describe('projection', function() {
     beforeEach(function() {
       rimraf.sync(ROOT);
@@ -1626,6 +1645,7 @@ describe('FSTree fs abstraction', function() {
       tree = treeFromDisk(ROOT);
     });
 
+    // TODO: add tests for null vs. []
     describe('files', function() {
       it('returns only matching files', function() {
         let filter = { files: ['hello.txt', 'a/foo/two.js', 'a/bar'] };
@@ -1926,11 +1946,14 @@ describe('FSTree fs abstraction', function() {
 
     it('passes down files setting from the root tree', () => {
       tree2.files = ['abc/bar.js'];
-      tree.writeFileSync('foo.txt', 'foo');
-      tree.writeFileSync('bar.js', 'let bar;');
-      tree2.symlinkSyncFromEntry(tree, '', 'abc');
+      tree.mkdirSync('test');
+      tree.writeFileSync('test/foo.txt', 'foo');
+      tree.writeFileSync('test/bar.js', 'let bar;');
+      tree2.symlinkSyncFromEntry(tree, 'test', 'abc');
 
       expect(sanitizeChanges(tree2.changes())).to.deep.equal(sanitizeChanges([
+        // Because the filter was set directly, it looks like the non-matching files were removed.
+        ['unlink', 'abc/foo.txt'],
         ['mkdir', 'abc'],
         ['create', 'abc/bar.js'],
       ]));
@@ -1938,11 +1961,14 @@ describe('FSTree fs abstraction', function() {
 
     it('passes down include setting from the root tree', () => {
       tree2.include = [path => path === 'abc/bar.js'];
-      tree.writeFileSync('foo.txt', 'foo');
-      tree.writeFileSync('bar.js', 'let bar;');
-      tree2.symlinkSyncFromEntry(tree, '', 'abc');
+      tree.mkdirSync('test');
+      tree.writeFileSync('test/foo.txt', 'foo');
+      tree.writeFileSync('test/bar.js', 'let bar;');
+      tree2.symlinkSyncFromEntry(tree, 'test', 'abc');
 
       expect(sanitizeChanges(tree2.changes())).to.deep.equal(sanitizeChanges([
+        // Because the filter was set directly, it looks like the non-matching files were removed.
+        ['unlink', 'abc/foo.txt'],
         ['mkdir', 'abc'],
         ['create', 'abc/bar.js'],
       ]));
@@ -1950,11 +1976,14 @@ describe('FSTree fs abstraction', function() {
 
     it('passes down exclude setting from the root tree', () => {
       tree2.exclude = [path => path !== 'abc/bar.js'];
-      tree.writeFileSync('foo.txt', 'foo');
-      tree.writeFileSync('bar.js', 'let bar;');
-      tree2.symlinkSyncFromEntry(tree, '', 'abc');
+      tree.mkdirSync('test');
+      tree.writeFileSync('test/foo.txt', 'foo');
+      tree.writeFileSync('test/bar.js', 'let bar;');
+      tree2.symlinkSyncFromEntry(tree, 'test', 'abc');
 
       expect(sanitizeChanges(tree2.changes())).to.deep.equal(sanitizeChanges([
+        // Because the filter was set directly, it looks like the non-matching files were removed.
+        ['unlink', 'abc/foo.txt'],
         ['mkdir', 'abc'],
         ['create', 'abc/bar.js'],
       ]));
@@ -2009,6 +2038,9 @@ describe('FSTree fs abstraction', function() {
         tree2.include = ['**/*.css'];
 
         expect(sanitizeChanges(tree2.changes())).to.deep.equal(sanitizeChanges([
+          // Because the filter was set directly, it looks like the non-matching files were removed.
+          ['unlink', 'd/foo/one.js'],
+          ['unlink', 'd/bar/two.js'],
           ['mkdir', 'd'],
           ['mkdir', 'd/bar'],
           ['create', 'd/bar/two.css'],
@@ -2023,6 +2055,9 @@ describe('FSTree fs abstraction', function() {
         tree3.include = ['**/*.css'];
 
         expect(sanitizeChanges(tree3.changes())).to.deep.equal(sanitizeChanges([
+          // Because the filter was set directly, it looks like the non-matching files were removed.
+          ['unlink', 'd/foo/one.js'],
+          ['unlink', 'd/bar/two.js'],
           ['mkdir', 'd'],
           ['mkdir', 'd/bar'],
           ['create', 'd/bar/two.css'],
@@ -2038,6 +2073,8 @@ describe('FSTree fs abstraction', function() {
         tree2.include = ['c/four.txt']
 
         expect(sanitizeChanges(tree2.changes())).to.deep.equal(sanitizeChanges([
+          // Because the filter was set directly, it looks like the non-matching files were removed.
+          ['unlink', 'c/four.js'],
           ['mkdir', 'c'],
           ['create', 'c/four.txt'],
         ]));
@@ -2049,6 +2086,12 @@ describe('FSTree fs abstraction', function() {
         tree2.include = ['**/*.css'];
 
         expect(sanitizeChanges(tree2.changes())).to.deep.equal(sanitizeChanges([
+          // Because the filter was set directly, it looks like the non-matching files were removed.
+          ['unlink', 'f/foo/one.js'],
+          ['unlink', 'f/bar/two.js'],
+          ['unlink', 'd/four.txt'],
+          ['unlink', 'd/four.js'],
+          ['rmdir', 'd'],
           ['mkdir', 'f'],
           ['mkdir', 'f/bar'],
           ['create', 'f/bar/two.css'],
