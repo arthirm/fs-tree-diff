@@ -46,6 +46,15 @@ describe('FSTree patch', function() {
         });
       });
 
+      // this occurs in ember-browserify/lib/stub-generator.js
+      context('to a lazy empty tree', function() {
+        it('does not throw', function() {
+          expect(function() {
+            fsTree.calculatePatch(new FSTree());
+          }).to.not.throw();
+        });
+      });
+
       context('to a non-empty tree', function() {
         it('returns n create operations', function() {
           expect(fsTree.calculatePatch(FSTree.fromPaths([

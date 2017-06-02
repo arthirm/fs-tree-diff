@@ -188,10 +188,7 @@ describe('FSTree fs abstraction', function() {
 
     describe('.reread', function() {
       it('resets entries for source trees', function() {
-        tree = new FSTree({
-          root: `${ROOT}/my-directory`,
-          srcTree: true,
-        });
+        tree = treeFromDisk(`${ROOT}/my-directory`, true);
 
         expect(tree.walkPaths()).to.deep.equal([]);
 
@@ -212,10 +209,7 @@ describe('FSTree fs abstraction', function() {
       });
 
       it('does not reset entries for non-source trees', function() {
-        tree = new FSTree({
-          root: `${ROOT}/my-directory`,
-          srcTree: false,
-        });
+        tree = treeFromDisk(`${ROOT}/my-directory`);
 
         expect(tree.walkPaths()).to.deep.equal([]);
 
@@ -232,10 +226,7 @@ describe('FSTree fs abstraction', function() {
       });
 
       it('does not reset entries for non-source trees when new root matches old root', () => {
-        tree = new FSTree({
-          root: `${ROOT}/my-directory`,
-          srcTree: false,
-        });
+        tree = treeFromDisk(`${ROOT}/my-directory`);
 
         expect(tree.walkPaths()).to.deep.equal([]);
 
@@ -334,17 +325,22 @@ describe('FSTree fs abstraction', function() {
         `);
       });
 
-      it('throws for trees with parents', () => {
-        tree = new FSTree({
-          root: `${ROOT}`,
-          srcTree: true,
-        });
-
+      it('is no-op for trees with parents', () => {
+        tree = treeFromDisk(ROOT, true);
         tree2 = tree.chdir('my-directory');
 
-        expect(() => {
-          tree2.reread(`${ROOT}`);
-        }).to.throw(/parent/);
+        expect(tree2.walkPaths()).to.deep.equal([]);
+
+        fixturify.writeSync(`${ROOT}/my-directory`, {
+          a: {
+            b: 'hello',
+          },
+          a2: 'guten tag'
+        });
+
+        tree2.reread();
+
+        expect(tree2.walkPaths()).to.deep.equal([]);
       });
     });
 
@@ -619,7 +615,6 @@ describe('FSTree fs abstraction', function() {
         tree.writeFileSync('my-directory/bar/baz', 'hello');
         tree2.symlinkSyncFromEntry(tree, 'my-directory', 'b');
 
-        debugger;
         expect(tree2.walkPaths()).to.deep.equal([
           'b',
           'b/bar',
@@ -679,14 +674,13 @@ describe('FSTree fs abstraction', function() {
       it('tracks a change', function() {
         tree.symlinkSync(path.join(tree.root, 'hello.txt'), 'my-link');
 
-        expect(tree.symlinkSync(path.join(tree.root, 'hello.txt'), 'my-link'));
-
         expect(sanitizeChanges(tree._rawChanges)).to.deep.equal(sanitizeChanges([
           ['create', 'my-link'],
         ]));
       });
 
-      describe('idempotent', function() {
+      // TODO: What does 'idemponent' really mean here?  fs.symlinkSync throws when the target already exists.
+      describe.skip('idempotent', function() {
         it('is idempotent files added this session', function() {
           fs.symlinkSync(path.join(tree.root, 'hello.txt'), path.join(tree.root, 'hi'));
 
@@ -724,7 +718,8 @@ describe('FSTree fs abstraction', function() {
         });
       });
 
-      describe('update', function() {
+      // TODO: What is this supposed to be testing?
+      describe.skip('update', function() {
         it('tracks and correctly updates a file -> file', function() {
           tree.symlinkSync(path.join(tree.root, 'hello.txt'), 'hi');
 
@@ -1242,6 +1237,27 @@ describe('FSTree fs abstraction', function() {
           'bar/foo.txt',
         ]);
       });
+
+      // This one is a bit complex because it replicates a scenario discovered in `ember new`.
+      it('applies filters to expanded symlinks', () => {
+        fixturify.writeSync(ROOT3, {
+          bar: {
+            'foo.js': 'let foo;',
+          },
+        });
+
+        tree3 = treeFromDisk(ROOT3, true);
+        tree2.symlinkSyncFromEntry(tree3, '', '');
+        tree.symlinkSyncFromEntry(tree2, '', 'my-directory/baz');
+
+        const rootedTree = tree.chdir('my-directory');
+
+        expect(rootedTree.walkEntries().map(entry => entry.relativePath)).to.deep.equal([
+          'baz',
+          'baz/bar/',
+          'baz/bar/foo.js',
+        ]);
+      });
     });
 
     describe('.chdir', function() {
@@ -1276,18 +1292,28 @@ describe('FSTree fs abstraction', function() {
         }).to.throw(/ENOENT/);
       });
 
-      it('can chdir into projections', function() {
+      it('can chdir into symlinks', function() {
         tree.mkdirSync('my-directory/foo');
         tree.writeFileSync('my-directory/foo/bar.js', 'let bar;');
-        tree2.symlinkSyncFromEntry(tree, 'my-directory', 'abc');
+        tree2.mkdirSync('abc');
+        tree2.symlinkSyncFromEntry(tree, 'my-directory', 'abc/def');
+        tree3.symlinkSyncFromEntry(tree2, 'abc', 'xyz');
 
-        const rootedTree2 = tree2.chdir('abc/foo');
+        const rootedTree3 = tree3.chdir('xyz/def/foo');
 
-        expect(rootedTree2.cwd).to.equal('abc/foo/');
-        debugger;
-        expect(rootedTree2.walkPaths()).to.deep.equal([
+        expect(rootedTree3.cwd).to.equal('xyz/def/foo/');
+        expect(rootedTree3.walkPaths()).to.deep.equal([
           'bar.js',
         ]);
+      });
+
+      // It cannot elide the current tree, or filters will be lost.
+      it('always projects the current tree', () => {
+        tree2.symlinkSyncFromEntry(tree, '', 'foo');
+
+        const rootedTree2 = tree2.chdir('foo');
+
+        expect(rootedTree2._parent).to.equal(tree2);
       });
 
       describe('when path does not exist', function() {
@@ -1414,7 +1440,6 @@ describe('FSTree fs abstraction', function() {
 
           let newTree = tree.chdir('my-directory/subdir');
 
-          debugger;
           expect(sanitizeChanges(newTree.changes())).to.deep.equal(sanitizeChanges([
             ['create', 'ohai.txt'],
           ]));
@@ -1423,20 +1448,6 @@ describe('FSTree fs abstraction', function() {
             ['mkdir', 'my-directory/subdir'],
             ['create', 'my-directory/subdir/ohai.txt'],
           ]));
-        });
-
-        // TODO: remove this when match is removed.
-        it('is respected by match', function() {
-          expect(tree.match({ include: ['*'] }).map(e => e.relativePath)).to.deep.equal([
-            'hello.txt',
-            'my-directory/'
-          ]);
-
-          let newTree = tree.chdir('my-directory');
-
-          expect(newTree.match({ include: ['*'] }).map(e => e.relativePath)).to.deep.equal([
-            'ohai.txt',
-          ]);
         });
       });
     });
@@ -1491,15 +1502,17 @@ describe('FSTree fs abstraction', function() {
           });
         });
 
-        it('throws if no root is provided', () => {
+        it('uses an empty array if no root is provided', () => {
           lazyTree = new FSTree({
             entries: null,
           });
 
           expect(lazyTree._hasEntries).to.be.false;
-          expect(() => {
-            lazyTree._ensureEntriesPopulated();
-          }).to.throw('Cannot scan for entries, as no root was provided.');
+
+          lazyTree._ensureEntriesPopulated();
+
+          expect(lazyTree._hasEntries).to.be.true;
+          expect(lazyTree._rawEntries).to.deep.equal([]);
         });
 
         it('lazily populates entries for statSync', function() {
@@ -1794,7 +1807,7 @@ describe('FSTree fs abstraction', function() {
       });
 
       it('matches by a mix of matchers', function() {
-        let filter = { exclude: ['**/*.css', new RegExp(/(hello|one)\.(txt|js)/), p => p === 'a/bar/three.js'] };
+        let filter = { exclude: ['**/*.css', /(hello|one)\.(txt|js)/, p => p === 'a/bar/three.js'] };
 
         expect(tree.filtered(filter).walkPaths()).to.deep.equal([
           'a/',
@@ -1822,6 +1835,30 @@ describe('FSTree fs abstraction', function() {
           'one.js',
         ]);
       });
+
+      it('excludes entire trees', () => {
+        tree.mkdirSync('b/dotfiles');
+        tree.writeFileSync('b/dotfiles/.file', 'dotfile');
+
+        const filter = { exclude: ['b/**/*'] };
+
+        expect(tree.filtered(filter).walkPaths()).to.deep.equal([
+          "a/",
+          "a/bar/",
+          "a/bar/three.css",
+          "a/bar/three.js",
+          "a/bar/two.css",
+          "a/bar/two.js",
+          "a/foo/",
+          "a/foo/one.css",
+          "a/foo/one.js",
+          "a/foo/two.css",
+          "a/foo/two.js",
+          "b/",
+          "goodbye.txt",
+          "hello.txt",
+        ]);
+      });
     });
   });
 
@@ -1836,9 +1873,9 @@ describe('FSTree fs abstraction', function() {
       let filter = { include: ['**/*'] };
 
       expect(sanitizeChanges(tree.filtered(filter).changes())).to.deep.equal(sanitizeChanges([
-        ['create', 'omg.js'],
         ['change', 'hello.txt'],
         ['create', 'my-directory/goodbye.txt'],
+        ['create', 'omg.js'],
       ]));
     });
 
@@ -1892,6 +1929,37 @@ describe('FSTree fs abstraction', function() {
       ]));
     });
 
+    // This one is a bit complex because it replicates a scenario discovered in `ember new`.
+    it('reads changes from linked srcTree', () => {
+      fixturify.writeSync(ROOT3, {
+        'foo.css': 'foo {}',
+      });
+
+      tree.stop();
+      tree.start();
+
+      tree3 = treeFromDisk(ROOT3, true);
+      tree2.mkdirSync('baz');
+      tree2.symlinkSyncFromEntry(tree3, '', 'baz/bar');
+      tree.symlinkSyncFromEntry(tree2, 'baz', 'abc');
+
+      const rootedTree = tree.chdir('abc/bar');
+
+      expect(sanitizeChanges(rootedTree.changes())).to.deep.equal(sanitizeChanges([
+        ['create', 'foo.css'],
+      ]));
+    });
+
+    it('prefixes changes from existing symlinks', () => {
+      tree2.symlinkSyncFromEntry(tree, 'my-directory', 'foo');
+      tree2.stop();
+      tree2.start();
+
+      expect(sanitizeChanges(tree2.changes())).to.deep.equal(sanitizeChanges([
+        ['create', 'foo/goodbye.txt'],
+      ]));
+    });
+
     it('traverses root links', () => {
       tree.writeFileSync('foo.txt', 'foo');
       tree2.symlinkSyncFromEntry(tree, '', 'abc');
@@ -1932,15 +2000,13 @@ describe('FSTree fs abstraction', function() {
     });
 
     it('honors exclude setting on the projected tree', () => {
-      tree.writeFileSync('my-directory/foo.txt', 'foo');
-      tree.writeFileSync('my-directory/bar.js', 'let bar;');
-      tree.exclude = [path => path !== 'my-directory/bar.js'];
+      tree.exclude = [path => !path.startsWith('my-directory')];
       tree2.symlinkSyncFromEntry(tree, '', 'abc');
 
       expect(sanitizeChanges(tree2.changes())).to.deep.equal(sanitizeChanges([
         ['mkdir', 'abc'],
         ['mkdir', 'abc/my-directory'],
-        ['create', 'abc/my-directory/bar.js'],
+        ['create', 'abc/my-directory/goodbye.txt'],
       ]));
     });
 
@@ -1975,17 +2041,28 @@ describe('FSTree fs abstraction', function() {
     });
 
     it('passes down exclude setting from the root tree', () => {
-      tree2.exclude = [path => path !== 'abc/bar.js'];
+      tree2.exclude = [path => !path.startsWith('abc')];
       tree.mkdirSync('test');
       tree.writeFileSync('test/foo.txt', 'foo');
       tree.writeFileSync('test/bar.js', 'let bar;');
       tree2.symlinkSyncFromEntry(tree, 'test', 'abc');
 
       expect(sanitizeChanges(tree2.changes())).to.deep.equal(sanitizeChanges([
-        // Because the filter was set directly, it looks like the non-matching files were removed.
-        ['unlink', 'abc/foo.txt'],
         ['mkdir', 'abc'],
         ['create', 'abc/bar.js'],
+        ['create', 'abc/foo.txt'],
+      ]));
+    });
+
+    it('retains symlinked directories which contain matching files', () => {
+      tree2.symlinkSyncFromEntry(tree, '', 'abc');
+      tree2.writeFileSync('def.js', 'let def;');
+      tree3 = tree2.filtered({ include: [/.*\.js$/] });
+
+      expect(sanitizeChanges(tree3.changes())).to.deep.equal(sanitizeChanges([
+        ['mkdir', 'abc'],
+        ['create', 'abc/omg.js'],
+        ['create', 'def.js'],
       ]));
     });
 
@@ -2109,13 +2186,13 @@ describe('FSTree fs abstraction', function() {
         });
 
         expect(sanitizeChanges(tree3.changes())).to.deep.equal(sanitizeChanges([
+          ['mkdir', 'd'],
+          ['create', 'd/four.js'],
           ['mkdir', 'f'],
           ['mkdir', 'f/bar'],
           ['create', 'f/bar/two.js'],
           ['mkdir', 'f/foo'],
           ['create', 'f/foo/one.js'],
-          ['mkdir', 'd'],
-          ['create', 'd/four.js'],
         ]));
       });
 
@@ -2196,48 +2273,6 @@ describe('FSTree fs abstraction', function() {
           ['rmdir', 'a'],
         ]));
       });
-    });
-  });
-
-  describe('match', function() {
-    beforeEach(function() {
-      tree = new FSTree.fromEntries([
-        directory('a/'),
-        directory('a/b/'),
-        directory('a/b/c/'),
-        directory('a/b/c/d/'),
-        file('a/b/c/d/foo.js'),
-        directory('a/b/q/'),
-        directory('a/b/q/r/'),
-        file('a/b/q/r/bar.js'),
-      ]);
-    })
-
-    it('ignores nothing, if all match', function() {
-      const matched = tree.match({ include: ['**/*.js'] });
-
-      expect(matched.map(entry => entry.relativePath)).to.deep.equal([
-        'a',
-        'a/b',
-        'a/b/c',
-        'a/b/c/d',
-        'a/b/c/d/foo.js',
-        'a/b/q',
-        'a/b/q/r',
-        'a/b/q/r/bar.js',
-      ]);
-    });
-
-    it('ignores those that do not match, if all match', function() {
-      const matched = tree.match({ include: ['a/b/c/**/*'] });
-
-      expect(matched.map((entry) => entry.relativePath)).to.deep.equal([
-        'a',
-        'a/b',
-        'a/b/c',
-        'a/b/c/d',
-        'a/b/c/d/foo.js',
-      ]);
     });
   });
 });

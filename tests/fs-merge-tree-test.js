@@ -75,8 +75,6 @@ function applyChanges(changes, outTree) {
 
 describe('FSMergeTree', function () {
   const ROOT = path.resolve('tmp/fs-test-root/');
-  // const ROOT2 = path.resolve('tmp/fs-test-root2/');
-  // const ROOT3 = path.resolve('tmp/fs-test-root3/');
 
   beforeEach(function () {
     rimraf.sync(ROOT);
@@ -178,7 +176,6 @@ describe('FSMergeTree', function () {
       let fileInfos = mergeTrees._mergeRelativePath(null, '');
       let entries = mapBy(fileInfos, 'entry');
 
-      //expect(mapBy(entries, 'relativePath')).to.deep.equal(['bar/', 'c/', 'e', 'qux']);
       expect(mapBy(entries, 'relativePath')).to.deep.equal(['bar', 'c', 'e', 'qux']);
     });
 
@@ -445,6 +442,35 @@ describe('FSMergeTree', function () {
           jkl: 'jkl',
         },
       });
+    });
+
+    it('doesn\'t expand changes for symlinks with linkDir=true', () => {
+      fixturify.writeSync(ROOT, {
+        source: {
+          index: {
+            abc: 'abc',
+            def: 'def',
+          },
+        },
+        in: {},
+      });
+
+      const sourceTree = treeFromDisk(path.join(ROOT, 'source'));
+      const inTree = treeFromDisk(path.join(ROOT, 'in'));
+
+      inTree.symlinkSyncFromEntry(sourceTree, 'index', 'index');
+
+      const mergedTree = new FSMergeTree({
+        inputs: [inTree],
+      });
+
+      const changes = mergedTree.changes();
+
+      // Only one entry (instead of three), for the linkDir-ed mkdir.
+      expect(changes).to.have.length(1);
+      expect(changes).to.have.deep.property('0.0', 'mkdir');
+      expect(changes).to.have.deep.property('0.1', 'index');
+      expect(changes).to.have.deep.property('0.2.linkDir', true);
     });
   });
 });
