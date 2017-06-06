@@ -34,7 +34,7 @@
   "devDependencies": {
     "broccoli-builder": "^0.18.0",
     "broccoli-fixturify": "^0.3.0",
-    "broccoli-plugin": "^1.2.2",
+    "broccoli-plugin": "arthirm/broccoli-plugin#hjdivad/change-tracking",
     "chai": "^3.3.0",
     "common-tags": "^1.4.0",
     "fs-extra": "^1.0.0",
