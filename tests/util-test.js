@@ -42,24 +42,6 @@ describe('util', function() {
     });
   });
 
-  describe('.lchompPathStart', function() {
-    it('lchomps ./', function() {
-      expect(lchompPathStart('./')).to.eql('');
-    });
-
-    it('lchomps .', function() {
-      expect(lchompPathStart('.')).to.eql('');
-    });
-
-    it('does not lchomp ..', function() {
-      expect(lchompPathStart('..')).to.eql('..');
-    });
-
-    it('does not lchomp ../', function() {
-      expect(lchompPathStart('../')).to.eql('../');
-    });
-  });
-
   describe('.basename', function() {
     it('computes the basename of files', function() {
       expect(basename(Entry.fromPath('a/b/c'))).to.equal('a/b/');
