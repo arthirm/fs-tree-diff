@@ -32,7 +32,7 @@ function sanitizeChanges(changes) {
     let entry = change[2];
 
     if (!entry) {
-      entry = /mkdirp?|rmdir/.test(change[0]) ? directory(change[1]) : file(change[1]);
+      entry = /mkdir|rmdir/.test(change[0]) ? directory(change[1]) : file(change[1]);
     }
 
     return [change[0], change[1].replace(/\/$/, ''), sanitizeEntry(entry)];
@@ -395,6 +395,7 @@ describe('FSTree fs abstraction', function() {
       });
 
       it('finds root', function() {
+        debugger;
         const result = tree.findByRelativePath('');
 
         expect(result.entry).to.equal('root');
@@ -406,7 +407,7 @@ describe('FSTree fs abstraction', function() {
         expect(tree.findByRelativePath('my-directory/foo/..').entry).to.not.be.null;
       });
 
-      it('get entry for file from projections', function() {
+      it('get entry for file from symlinks', function() {
         tree.mkdirSync('my-directory/bar');
         tree.writeFileSync('my-directory/bar/baz', 'hello');
         tree2.symlinkSyncFromEntry(tree, 'my-directory', 'b')
@@ -414,14 +415,14 @@ describe('FSTree fs abstraction', function() {
         expect(tree2.findByRelativePath('b/bar/baz').entry).to.not.be.null;
       });
 
-      it('get entry for a directory from projections', function() {
+      it('get entry for a directory from symlinks', function() {
         tree.mkdirpSync('my-directory/bar/baz/');
         tree2.symlinkSyncFromEntry(tree, 'my-directory', 'b')
 
         expect(tree2.findByRelativePath('b/bar/baz/').entry).to.not.be.null;
       });
 
-      it('get entry for a file missing in projections', function() {
+      it('get entry for a file missing in symlinks', function() {
         tree.mkdirSync('my-directory/bar');
         tree.writeFileSync('my-directory/bar/baz', 'hello');
         tree2.symlinkSyncFromEntry(tree, 'my-directory', 'b')
@@ -429,7 +430,7 @@ describe('FSTree fs abstraction', function() {
         expect(tree2.findByRelativePath('b/bar/baz/abc').entry).to.be.null;
       });
 
-      it('get entry for a directory found in second level projections', function() {
+      it('get entry for a directory found in second level symlinks', function() {
         tree.mkdirpSync('my-directory/bar/baz');
         tree2.mkdirSync('a');
         tree2.symlinkSyncFromEntry(tree, 'my-directory/bar', 'a/foo');
@@ -490,6 +491,12 @@ describe('FSTree fs abstraction', function() {
 
           expect(tree2.findByRelativePath('c/baz.txt').entry).to.not.be.null;
           expect(tree2.readFileSync('c/baz.txt', 'UTF8')).to.equal('baz');
+        });
+
+        it('reads symlinked files', () => {
+          tree2.symlinkSyncFromEntry(tree, 'hello.txt', 'hello2.txt');
+
+          expect(tree2.readFileSync('hello2.txt', 'utf8')).to.equal('Hello, World!\n');
         });
       });
     });
@@ -594,35 +601,100 @@ describe('FSTree fs abstraction', function() {
         });
       });
 
-      it('throws across projections', function() {
+      it('throws when writing to a file which does not match filters', () => {
+        tree.exclude = ['**/*.css'];
+
+        expect(() => tree.writeFileSync('foo.css', 'foo {}')).to.throw(/filter/);
+      });
+
+      it('throws across symlinks', function() {
         tree.symlinkSyncFromEntry(tree, 'my-directory', 'other-directory');
 
         expect(function() {
           tree.writeFileSync('other-directory/foo.txt', 'foo');
         }).to.throw(/symlink/i);
       });
+
+      it('throws when writing to the tree\'s root', () => {
+        expect(() => tree.writeFileSync('', 'foo')).to.throw(/root/);
+      });
+
+      it('throws when writing into a non-existent directory', () => {
+        expect(() => tree.writeFileSync('foo/bar.txt', 'bar')).to.throw(/ENOENT/);
+      });
     });
 
     describe('.symlinkSyncFromEntry', function() {
-      it('symlink from root to destDir', function() {
-        tree2.symlinkSyncFromEntry(tree, '', 'b')
-
-        expect(tree2._rawEntries[0]._symlink.tree).to.equal(tree);
-      });
-
-      it('when only top level directory is symlinked', function() {
+      it('can link from a directory', function() {
         tree.mkdirSync('my-directory/bar');
-        tree.writeFileSync('my-directory/bar/baz', 'hello');
+        tree.writeFileSync('my-directory/bar/baz.txt', 'baz');
         tree2.symlinkSyncFromEntry(tree, 'my-directory', 'b');
 
         expect(tree2.walkPaths()).to.deep.equal([
           'b',
           'b/bar',
-          'b/bar/baz',
+          'b/bar/baz.txt',
         ]);
       });
 
-      it('throws across projections', function() {
+      it('can link from the root of the source tree', function() {
+        tree2.symlinkSyncFromEntry(tree, '', 'b')
+
+        expect(tree2.walkPaths()).to.deep.equal([
+          'b',
+          'b/hello.txt',
+          'b/my-directory/'
+        ]);
+      });
+
+      describe('when linking to the root of the target tree', () => {
+        it('succeeds', () => {
+          tree2.symlinkSyncFromEntry(tree, 'my-directory', '');
+          tree.writeFileSync('my-directory/foo.txt', 'foo');
+
+          expect(tree2.walkPaths()).to.deep.equal([
+            'foo.txt',
+          ]);
+        });
+
+        it('sets the target tree\' parent', () => {
+          tree2.symlinkSyncFromEntry(tree, 'my-directory', '');
+
+          expect(tree2.parent).to.not.be.undefined;
+        });
+
+        it('removes the target tree\'s root directory', () => {
+          tree2.symlinkSyncFromEntry(tree, 'my-directory', '');
+
+          const lstat = fs.lstatSync(tree2._root);
+
+          expect(lstat.mode & 61440).to.not.equal(16384);
+        });
+
+        it('creates a symlink at the target tree\'s root', () => {
+          tree2.symlinkSyncFromEntry(tree, 'my-directory', '');
+
+          const lstat = fs.lstatSync(tree2._root);
+
+          expect(lstat.mode & 61440).to.equal(40960);
+        });
+
+        it('throws if the target tree has contents', () => {
+          tree2.mkdirSync('foo');
+
+          expect(() => tree2.symlinkSyncFromEntry(tree, 'my-directory', '')).to.throw(/ENOTEMPTY/);
+        });
+      });
+
+      it('can link from a file', () => {
+        tree2.symlinkSyncFromEntry(tree, 'hello.txt', 'goodbye.txt');
+
+        expect(tree2.walkPaths()).to.deep.equal([
+          'goodbye.txt',
+        ]);
+      });
+
+      it('throws across symlinks', function() {
         tree.mkdirSync('foo');
         tree2.symlinkSyncFromEntry(tree, 'my-directory', 'other-directory');
 
@@ -631,7 +703,11 @@ describe('FSTree fs abstraction', function() {
         }).to.throw(/symlink/i);
       });
 
-      it('when destDir already exists', function() {
+      it('throws when symlinking into a non-existent directory', () => {
+        expect(() => tree2.symlinkSyncFromEntry(tree, 'my-directory', 'foo/bar', 'bar')).to.throw(/ENOENT/);
+      });
+
+      it('throws when destDir already exists', function() {
         tree.mkdirSync('my-directory/bar');
         tree.writeFileSync('my-directory/bar/baz', 'hello');
         tree2.mkdirSync('abc');
@@ -643,7 +719,7 @@ describe('FSTree fs abstraction', function() {
 
       });
 
-      it('when destfile already exists', function() {
+      it('throws when destfile already exists', function() {
         tree2.writeFileSync('b', 'hello');
 
         expect(() => {
@@ -651,10 +727,47 @@ describe('FSTree fs abstraction', function() {
         }).to.throw(/EEXIST/);
       });
 
-      it('when srcdir does not exist', function() {
+      it('throws when srcdir does not exist', function() {
         expect(function() {
           tree2.symlinkSyncFromEntry(tree, 'a', 'b')
         }).to.throw(/ENOENT/);
+      });
+    });
+
+    describe('.undoRootSymlink', () => {
+      it('removes parents from projections', () => {
+        tree2.symlinkSyncFromEntry(tree, '', '');
+        tree2.undoRootSymlink();
+
+        expect(tree2.parent).to.be.undefined;
+      });
+
+      it('removes the symlink', () => {
+        tree2.symlinkSyncFromEntry(tree, '', '');
+        tree2.undoRootSymlink();
+
+        const lstat = fs.lstatSync(tree2.root);
+
+        expect(lstat.mode & 61440).to.not.equal(40960);
+      });
+
+      it('recreates the root directory', () => {
+        tree2.symlinkSyncFromEntry(tree, '', '');
+        tree2.undoRootSymlink();
+
+        const lstat = fs.lstatSync(tree2.root);
+
+        expect(lstat.mode & 61440).to.equal(16384);
+      });
+
+      it('does nothing if the tree is not a projection', () => {
+        expect(() => tree2.undoRootSymlink()).to.not.throw();
+      });
+
+      it('throws if the projection was not created by symlinkSyncFromEntry', () => {
+        tree2 = tree.chdir('my-directory');
+
+        expect(() => tree2.undoRootSymlink()).to.throw(/root/);
       });
     });
 
@@ -679,7 +792,7 @@ describe('FSTree fs abstraction', function() {
         ]));
       });
 
-      // TODO: What does 'idemponent' really mean here?  fs.symlinkSync throws when the target already exists.
+      // FIXME: What does 'idemponent' really mean here?  fs.symlinkSync throws when the target already exists.
       describe.skip('idempotent', function() {
         it('is idempotent files added this session', function() {
           fs.symlinkSync(path.join(tree.root, 'hello.txt'), path.join(tree.root, 'hi'));
@@ -718,7 +831,7 @@ describe('FSTree fs abstraction', function() {
         });
       });
 
-      // TODO: What is this supposed to be testing?
+      // FIXME: What is this supposed to be testing?
       describe.skip('update', function() {
         it('tracks and correctly updates a file -> file', function() {
           tree.symlinkSync(path.join(tree.root, 'hello.txt'), 'hi');
@@ -741,13 +854,28 @@ describe('FSTree fs abstraction', function() {
         });
       });
 
-      it('throws across projections', function() {
+      it('throws if the target already exists', () => {
+        const source = path.join(ROOT2, 'foo.txt');
+        fs.writeFileSync(source, 'foo');
+
+        expect(() => tree.symlinkSync(source, 'hello.txt')).to.throw(/EEXIST/);
+      });
+
+      it('throws across symlinks', function() {
         tree.writeFileSync('foo.txt', 'foo');
         tree.symlinkSyncFromEntry(tree, 'my-directory', 'other-directory');
 
         expect(function() {
           tree.symlinkSync(`${tree.root}foo.txt`, 'other-directory/foo.txt');
         }).to.throw(/symlink/i);
+      });
+
+      it('throws when symlinking to the tree\'s root', () => {
+        expect(() => tree.symlinkSync(ROOT, '')).to.throw(/root/);
+      });
+
+      it('throws when symlinking into a non-existent directory', () => {
+        expect(() => tree.symlinkSync(ROOT, 'foo/bar')).to.throw(/ENOENT/);
       });
     });
 
@@ -799,13 +927,17 @@ describe('FSTree fs abstraction', function() {
         }).to.throw(/unlink/);
       });
 
-      it('throws across projections', function() {
+      it('throws across symlinks', function() {
         tree.writeFileSync('my-directory/foo.txt', 'foo');
         tree.symlinkSyncFromEntry(tree, 'my-directory', 'other-directory');
 
         expect(function() {
           tree.unlinkSync('other-directory/foo.txt');
         }).to.throw(/symlink/i);
+      });
+
+      it('throws when unlinking the tree\'s root', () => {
+        expect(() => tree.unlinkSync('')).to.throw(/root/);
       });
     });
 
@@ -851,13 +983,87 @@ describe('FSTree fs abstraction', function() {
         }).to.throw(/rmdir/);
       });
 
-      it('throws across projections', function() {
+      it('throws across symlinks', function() {
         tree.mkdirSync('my-directory/foo');
-        tree.symlinkSyncFromEntry(tree, 'my-directory', 'other-directory');
+        tree2.symlinkSyncFromEntry(tree, 'my-directory', 'other-directory');
 
         expect(function() {
-          tree.rmdirSync('other-directory/foo');
+          tree2.rmdirSync('other-directory/foo');
         }).to.throw(/symlink/i);
+
+        it('throws when removing the tree\'s root', () => {
+          expect(() => tree.rmdirSync(ROOT, '')).to.throw(/root/);
+        });
+      });
+    });
+
+    describe('.emptySync', () => {
+      it('removes directory contents', () => {
+        debugger;
+        tree.emptySync('');
+
+        expect(tree.walkPaths()).to.deep.equal([]);
+      });
+
+      it('empties only the specified directory', () => {
+        tree.writeFileSync('my-directory/foo.txt', 'foo');
+        tree.emptySync('my-directory');
+
+        expect(tree.walkPaths()).to.deep.equal([
+          'hello.txt',
+          'my-directory/',
+        ]);
+      });
+
+      it('deletes directory symlinks', () => {
+        tree2.symlinkSyncFromEntry(tree, 'my-directory', 'foo');
+        tree2.emptySync('');
+
+        expect(tree2.walkPaths()).to.deep.equal([]);
+      });
+
+      it('deletes file symlinks', () => {
+        tree2.symlinkSyncFromEntry(tree, 'hello.txt', 'foo.txt');
+        tree2.emptySync('');
+
+        expect(tree2.walkPaths()).to.deep.equal([]);
+      });
+
+      // TODO: unskip once symlinkSync marks entries
+      it.skip('deletes external symlinks', () => {
+        tree2.symlinkSync(path.join(ROOT, 'hello.txt'), 'foo.txt');
+        tree2.emptySync('');
+
+        expect(tree2.walkPaths()).to.deep.equal([]);
+      });
+
+      it('tracks changes', () => {
+        tree.emptySync('');
+
+        expect(sanitizeChanges(tree.changes())).to.deep.equal(sanitizeChanges([
+          ['rmdir', 'my-directory/'],
+          ['unlink', 'hello.txt'],
+        ]));
+      });
+
+      it('throws for files', () => {
+        expect(() => tree.emptySync('hello.txt')).to.throw('ENOTDIR: not a directory, empty \'hello.txt\'');
+      });
+
+      it('throws when stopped', () => {
+        tree.stop();
+
+        expect(() => tree.emptySync('')).to.throw('Cannot \'empty\' on a stopped tree.');
+      });
+
+      it('throws across symlinks', () => {
+        tree2.symlinkSyncFromEntry(tree, '', 'foo');
+
+        expect(() => tree2.emptySync('foo/my-directory')).to.throw(/symlink/i);
+      });
+
+      it('throws when emptying a non-existent directory', () => {
+        expect(() => tree.emptySync('foo')).to.throw(/ENOTDIR/);
       });
     });
 
@@ -939,12 +1145,20 @@ describe('FSTree fs abstraction', function() {
         }).to.throw(/mkdir/);
       });
 
-      it('throws across projections', function() {
+      it('throws across symlinks', function() {
         tree.symlinkSyncFromEntry(tree, 'my-directory', 'other-directory');
 
         expect(function() {
           tree.mkdirSync('other-directory/foo');
         }).to.throw(/symlink/i);
+      });
+
+      it('throws when creating the tree\'s root', () => {
+        expect(() => tree.mkdirSync('')).to.throw(/root/);
+      });
+
+      it('throws when creating in a non-existent directory', () => {
+        expect(() => tree.mkdirSync('foo/bar')).to.throw(/ENOENT/);
       });
     });
 
@@ -1012,6 +1226,10 @@ describe('FSTree fs abstraction', function() {
           'hello.txt',
           'my-directory/',
         ]);
+      });
+
+      it('throws if a file with the same name exists', () => {
+        expect(() => tree.mkdirpSync('hello.txt')).to.throw(/EEXIST/);
       });
 
       it('throws when stopped', function() {
@@ -1370,7 +1588,7 @@ describe('FSTree fs abstraction', function() {
         it('is respected by rmdirSync (by throwing)', function() {
           tree.mkdirSync('my-directory/subdir');
 
-          expect(tree.statSync('my-directory/subdir')).to.have.property('mode', 16877);
+          expect(tree.statSync('my-directory/subdir')).to.have.property('mode', Entry.DIRECTORY_MODE);
           expect(() => {
             tree.chdir('my-directory').rmdirSync('subdir');
           }).to.throw('Cannot \'rmdir\' on a projection.');
@@ -1629,8 +1847,263 @@ describe('FSTree fs abstraction', function() {
     });
   });
 
-  // TODO: add tests for setting filters manually on a "root" tree
-  describe('projection', function() {
+  describe('filters', function() {
+    function checkFilterOnRoot(filter, expected) {
+      Object.assign(tree, filter);
+
+      expect(tree.walkPaths()).to.deep.equal(expected);
+    }
+
+    function checkFilterOnProjection(filter, expected) {
+      expect(tree.filtered(filter).walkPaths()).to.deep.equal(expected);
+    }
+
+    function checkAllFilters(check) {
+      describe('files', () => {
+        it('returns only matching files', function() {
+          check({ files: ['hello.txt', 'a/foo/two.js', 'a/bar'] }, [
+            'a/',
+            'a/bar/',
+            'a/foo/',
+            'a/foo/two.js',
+            'hello.txt',
+          ]);
+        });
+
+        it('returns no files when set to an empty array', () => {
+          check({ files: [] }, []);
+        });
+
+        it('returns all files when set to null', () => {
+          check({ files: null }, [
+            'a/',
+            'a/bar/',
+            'a/bar/three.css',
+            'a/bar/three.js',
+            'a/bar/two.css',
+            'a/bar/two.js',
+            'a/foo/',
+            'a/foo/one.css',
+            'a/foo/one.js',
+            'a/foo/two.css',
+            'a/foo/two.js',
+            'b/',
+            'b/dotfiles/',
+            'b/dotfiles/.file',
+            'goodbye.txt',
+            'hello.txt',
+          ]);
+        });
+
+        it('returns all files when set to undefined', () => {
+          check({ files: undefined }, [
+            'a/',
+            'a/bar/',
+            'a/bar/three.css',
+            'a/bar/three.js',
+            'a/bar/two.css',
+            'a/bar/two.js',
+            'a/foo/',
+            'a/foo/one.css',
+            'a/foo/one.js',
+            'a/foo/two.css',
+            'a/foo/two.js',
+            'b/',
+            'b/dotfiles/',
+            'b/dotfiles/.file',
+            'goodbye.txt',
+            'hello.txt',
+          ]);
+        });
+
+        it('respects cwd', function() {
+          check({ cwd: 'a/foo', files: ['one.js', 'two.css'] }, [
+            'one.js',
+            'two.css',
+          ]);
+        });
+
+        it('normalizes paths before comparison', () => {
+          check({ files: [ './c/../hello.txt' ]}, [
+            'hello.txt',
+          ]);
+        });
+
+        it('is incompatible with include', function() {
+          expect(function(){
+            check({ files: ['a/foo/one.js'], include: ['a/foo/one.css'] }, null);
+          }).to.throw('Cannot pass files option and a include/exlude filter. You can only have one or the other');
+        });
+
+        it('is incompatible with exclude', function() {
+          expect(function(){
+            check({ files: ['a/foo/one.js'], exclude: ['a/foo/one.css'] }, null);
+          }).to.throw('Cannot pass files option and a include/exlude filter. You can only have one or the other');
+        });
+
+        it('must be null, undefined, or an array', () => {
+          expect(() => check({ files: 4 })).to.throw(/null or an array/);
+          expect(() => check({ files: true })).to.throw(/null or an array/);
+          expect(() => check({ files: 'foo.js' })).to.throw(/null or an array/);
+          expect(() => check({ files: new Date() })).to.throw(/null or an array/);
+        });
+      });
+
+      describe('include', function() {
+        it('matches by regexp', function() {
+          check({ include: [new RegExp(/(hello|one)\.(txt|js)/)] }, [
+            'a/',
+            'a/foo/',
+            'a/foo/one.js',
+            'hello.txt',
+          ]);
+        });
+
+        it('matches by function', function() {
+          check({ include: [p => p === 'a/bar/three.css'] }, [
+            'a/',
+            'a/bar/',
+            'a/bar/three.css',
+          ]);
+        });
+
+        it('matches by string globs', function() {
+          check({ include: ['**/*.{txt,js}'] }, [
+            'a/',
+            'a/bar/',
+            'a/bar/three.js',
+            'a/bar/two.js',
+            'a/foo/',
+            'a/foo/one.js',
+            'a/foo/two.js',
+            'goodbye.txt',
+            'hello.txt',
+          ]);
+        });
+
+        it('matches by a mix of matchers', function() {
+          check({ include: ['**/*.txt', new RegExp(/(hello|one)\.(txt|js)/), p => p === 'a/bar/three.js'] }, [
+            'a/',
+            'a/bar/',
+            'a/bar/three.js',
+            'a/foo/',
+            'a/foo/one.js',
+            'goodbye.txt',
+            'hello.txt',
+          ]);
+        });
+
+        it('respects cwd', function() {
+          check({ cwd: 'a/foo', include: ['*.css'] }, [
+            'one.css',
+            'two.css',
+          ]);
+        });
+
+        it('must be an array', () => {
+          expect(() => check({ include: 4 })).to.throw(/an array/);
+          expect(() => check({ include: true })).to.throw(/an array/);
+          expect(() => check({ include: 'foo.js' })).to.throw(/an array/);
+          expect(() => check({ include: new Date() })).to.throw(/an array/);
+        });
+      });
+
+      describe('exclude', function() {
+        it('matches by regexp', function() {
+          check({ exclude: [new RegExp(/(hello|one|two)\.(txt|js)/)] }, [
+            'a/',
+            'a/bar/',
+            'a/bar/three.css',
+            'a/bar/three.js',
+            'a/bar/two.css',
+            'a/foo/',
+            'a/foo/one.css',
+            'a/foo/two.css',
+            'b/',
+            'b/dotfiles/',
+            'b/dotfiles/.file',
+            'goodbye.txt',
+          ]);
+        });
+
+        it('matches by function', function() {
+          check({ cwd: 'a/bar', exclude: [p => p === 'three.css'] }, [
+            'three.js',
+            'two.css',
+            'two.js',
+          ]);
+        });
+
+        it('matches by string globs', function() {
+          check({ exclude: ['**/*.{txt,css}'] }, [
+            'a/',
+            'a/bar/',
+            'a/bar/three.js',
+            'a/bar/two.js',
+            'a/foo/',
+            'a/foo/one.js',
+            'a/foo/two.js',
+            'b/',
+            'b/dotfiles/',
+            'b/dotfiles/.file',
+          ]);
+        });
+
+        it('matches by a mix of matchers', function() {
+          check({ exclude: ['**/*.css', /(hello|one)\.(txt|js)/, p => p === 'a/bar/three.js'] }, [
+            'a/',
+            'a/bar/',
+            'a/bar/two.js',
+            'a/foo/',
+            'a/foo/two.js',
+            'b/',
+            'b/dotfiles/',
+            'b/dotfiles/.file',
+            'goodbye.txt',
+          ]);
+        });
+
+        it('respects cwd', function() {
+          check({ cwd: 'a/foo', exclude: ['*.css'] }, [
+            'one.js',
+            'two.js',
+          ]);
+        });
+
+        it('takes precedence over include', function() {
+          check({ cwd: 'a/foo', include: ['one.css', 'one.js'], exclude: ['*.css'] }, [
+            'one.js',
+          ]);
+        });
+
+        it('excludes entire trees', () => {
+          check({ exclude: ['b/**/*'] }, [
+            'a/',
+            'a/bar/',
+            'a/bar/three.css',
+            'a/bar/three.js',
+            'a/bar/two.css',
+            'a/bar/two.js',
+            'a/foo/',
+            'a/foo/one.css',
+            'a/foo/one.js',
+            'a/foo/two.css',
+            'a/foo/two.js',
+            'b/',
+            'goodbye.txt',
+            'hello.txt',
+          ]);
+        });
+
+        it('must be an array', () => {
+          expect(() => check({ exclude: 4 })).to.throw(/an array/);
+          expect(() => check({ exclude: true })).to.throw(/an array/);
+          expect(() => check({ exclude: 'foo.js' })).to.throw(/an array/);
+          expect(() => check({ exclude: new Date() })).to.throw(/an array/);
+        });
+      });
+    }
+
     beforeEach(function() {
       rimraf.sync(ROOT);
       fs.mkdirpSync(ROOT);
@@ -1652,213 +2125,32 @@ describe('FSTree fs abstraction', function() {
             'three.css': '',
           }
         },
-        'b': {},
+        'b': {
+          'dotfiles': {
+            '.file': 'dotfile',
+          },
+        },
       });
 
       tree = treeFromDisk(ROOT);
     });
 
-    // TODO: add tests for null vs. []
-    describe('files', function() {
-      it('returns only matching files', function() {
-        let filter = { files: ['hello.txt', 'a/foo/two.js', 'a/bar'] };
-
-        // funnel will cp -r if files:[ 'path/to/dir/' ]
-        // so this is semantically different, but i don't think it's actually
-        // public API for files to contain a path to a dir
-        expect(tree.filtered(filter).walkPaths()).to.deep.equal([
-          'a/',
-          'a/bar/',
-          'a/foo/',
-          'a/foo/two.js',
-          'hello.txt',
-        ]);
+    describe('root', () => {
+      describe('srcTree = false', () => {
+        checkAllFilters(checkFilterOnRoot);
       });
 
-      it('respects cwd', function() {
-        let filter = { cwd: 'a/foo', files: ['one.js', 'two.css'] };
+      describe('srcTree = true', () => {
+        beforeEach(() => {
+          tree = treeFromDisk(ROOT, true);
+        });
 
-        expect(tree.filtered(filter).walkPaths()).to.deep.equal([
-          'one.js',
-          'two.css',
-        ]);
-      });
-
-      it('is incompatible with include', function() {
-        let filter = { files: ['a/foo/one.js'], include: ['a/foo/one.css'] };
-
-        expect(function(){
-          tree.filtered(filter).walkPaths()
-        }).to.throw('Cannot pass files option and a include/exlude filter. You can only have one or the other');
-      });
-
-      it('is incompatible with exclude', function() {
-        let filter = { files: ['a/foo/one.js'], exclude: ['a/foo/one.css'] };
-
-        expect(function(){
-          tree.filtered(filter).walkPaths()
-        }).to.throw('Cannot pass files option and a include/exlude filter. You can only have one or the other');
+        checkAllFilters(checkFilterOnRoot);
       });
     });
 
-    describe('include', function() {
-      it('matches by regexp', function() {
-        let filter = { include: [new RegExp(/(hello|one)\.(txt|js)/)] };
-
-        expect(tree.filtered(filter).walkPaths()).to.deep.equal([
-          'a/',
-          'a/foo/',
-          'a/foo/one.js',
-          'hello.txt',
-        ]);
-      });
-
-      it('matches by function', function() {
-        let filter = { include: [p => p === 'a/bar/three.css'] };
-
-        expect(tree.filtered(filter).walkPaths()).to.deep.equal([
-          'a/',
-          'a/bar/',
-          'a/bar/three.css',
-        ]);
-      });
-
-      it('matches by string globs', function() {
-        let filter = { include: ['**/*.{txt,js}'] };
-
-        expect(tree.filtered(filter).walkPaths()).to.deep.equal([
-          'a/',
-          'a/bar/',
-          'a/bar/three.js',
-          'a/bar/two.js',
-          'a/foo/',
-          'a/foo/one.js',
-          'a/foo/two.js',
-          'goodbye.txt',
-          'hello.txt',
-        ]);
-      });
-
-      it('matches by a mix of matchers', function() {
-        let filter = { include: ['**/*.txt', new RegExp(/(hello|one)\.(txt|js)/), p => p === 'a/bar/three.js'] };
-
-        expect(tree.filtered(filter).walkPaths()).to.deep.equal([
-          'a/',
-          'a/bar/',
-          'a/bar/three.js',
-          'a/foo/',
-          'a/foo/one.js',
-          'goodbye.txt',
-          'hello.txt',
-        ]);
-      });
-
-      it('respects cwd', function() {
-        let filter = { cwd: 'a/foo', include: ['*.css'] };
-
-        expect(tree.filtered(filter).walkPaths()).to.deep.equal([
-          'one.css',
-          'two.css',
-        ]);
-      });
-    });
-
-    describe('exclude', function() {
-      it('matches by regexp', function() {
-        let filter = { exclude: [new RegExp(/(hello|one|two)\.(txt|js)/)] };
-
-        expect(tree.filtered(filter).walkPaths()).to.deep.equal([
-          'a/',
-          'a/bar/',
-          'a/bar/three.css',
-          'a/bar/three.js',
-          'a/bar/two.css',
-          'a/foo/',
-          'a/foo/one.css',
-          'a/foo/two.css',
-          'b/',
-          'goodbye.txt',
-        ]);
-      });
-
-      it('matches by function', function() {
-        let filter = { cwd: 'a/bar', exclude: [p => p === 'three.css'] };
-
-        expect(tree.filtered(filter).walkPaths()).to.deep.equal([
-          'three.js',
-          'two.css',
-          'two.js',
-        ]);
-      });
-
-      it('matches by string globs', function() {
-        let filter = { exclude: ['**/*.{txt,css}'] };
-
-        expect(tree.filtered(filter).walkPaths()).to.deep.equal([
-          'a/',
-          'a/bar/',
-          'a/bar/three.js',
-          'a/bar/two.js',
-          'a/foo/',
-          'a/foo/one.js',
-          'a/foo/two.js',
-          'b/',
-        ]);
-      });
-
-      it('matches by a mix of matchers', function() {
-        let filter = { exclude: ['**/*.css', /(hello|one)\.(txt|js)/, p => p === 'a/bar/three.js'] };
-
-        expect(tree.filtered(filter).walkPaths()).to.deep.equal([
-          'a/',
-          'a/bar/',
-          'a/bar/two.js',
-          'a/foo/',
-          'a/foo/two.js',
-          'b/',
-          'goodbye.txt',
-        ]);
-      });
-
-      it('respects cwd', function() {
-        let filter = { cwd: 'a/foo', exclude: ['*.css'] };
-        expect(tree.filtered(filter).walkPaths()).to.deep.equal([
-          'one.js',
-          'two.js',
-        ]);
-      });
-
-      it('takes precedence over include', function() {
-        let filter = { cwd: 'a/foo', include: ['one.css', 'one.js'], exclude: ['*.css'] };
-
-        expect(tree.filtered(filter).walkPaths()).to.deep.equal([
-          'one.js',
-        ]);
-      });
-
-      it('excludes entire trees', () => {
-        tree.mkdirSync('b/dotfiles');
-        tree.writeFileSync('b/dotfiles/.file', 'dotfile');
-
-        const filter = { exclude: ['b/**/*'] };
-
-        expect(tree.filtered(filter).walkPaths()).to.deep.equal([
-          "a/",
-          "a/bar/",
-          "a/bar/three.css",
-          "a/bar/three.js",
-          "a/bar/two.css",
-          "a/bar/two.js",
-          "a/foo/",
-          "a/foo/one.css",
-          "a/foo/one.js",
-          "a/foo/two.css",
-          "a/foo/two.js",
-          "b/",
-          "goodbye.txt",
-          "hello.txt",
-        ]);
-      });
+    describe('projection', function() {
+      checkAllFilters(checkFilterOnProjection);
     });
   });
 
@@ -1917,7 +2209,7 @@ describe('FSTree fs abstraction', function() {
       ]));
     });
 
-    it('follows projections in its own cwd', () => {
+    it('follows symlinks in its own cwd', () => {
       tree.mkdirSync('my-directory/foo');
       tree.writeFileSync('my-directory/foo/bar.txt', 'bar');
       tree2.symlinkSyncFromEntry(tree, 'my-directory', 'abc');
@@ -2066,6 +2358,82 @@ describe('FSTree fs abstraction', function() {
       ]));
     });
 
+    it('considers CWD when filtering changes created from symlinks\' entries', () => {
+      tree2.mkdirSync('foo');
+      tree2.symlinkSyncFromEntry(tree, '', 'foo/bar');
+      tree3 = tree2.filtered({ cwd: 'foo', include: ['bar/*.txt'] });
+
+      expect(sanitizeChanges(tree3.changes())).to.deep.equal(sanitizeChanges([
+        ['mkdir', 'bar'],
+        ['create', 'bar/hello.txt'],
+      ]));
+    });
+
+    it('includes changes caused by changing filters on a srcTree=false root tree', () => {
+      tree.include = [ '**/*.js' ];
+
+      tree.stop();
+      tree.start();
+
+      tree.include = [ '**/*.txt' ];
+
+      expect(sanitizeChanges(tree.changes())).to.deep.equal(sanitizeChanges([
+        ['unlink', 'omg.js'],
+        ['create', 'hello.txt'],
+        ['mkdir', 'my-directory/'],
+        ['create', 'my-directory/goodbye.txt'],
+      ]));
+    });
+
+    it('includes changes caused by changing filters on a srcTree=true root tree', () => {
+      tree = treeFromDisk(ROOT, true);
+      tree.include = [ '**/*.js' ];
+
+      tree.reread();
+
+      tree.include = [ '**/*.txt' ];
+
+      expect(sanitizeChanges(tree.changes())).to.deep.equal(sanitizeChanges([
+        ['unlink', 'omg.js'],
+        ['create', 'hello.txt'],
+        ['mkdir', 'my-directory/'],
+        ['create', 'my-directory/goodbye.txt'],
+      ]));
+    });
+
+    it('includes changes caused by changing filters on a projection of a srcTree=false root', () => {
+      const projectedTree = tree.filtered({ include: [ '**/*.js' ] });
+
+      tree.stop();
+      tree.start();
+
+      projectedTree.include = [ '**/*.txt' ];
+
+      expect(sanitizeChanges(projectedTree.changes())).to.deep.equal(sanitizeChanges([
+        ['unlink', 'omg.js'],
+        ['create', 'hello.txt'],
+        ['mkdir', 'my-directory/'],
+        ['create', 'my-directory/goodbye.txt'],
+      ]));
+    });
+
+    it('includes changes caused by changing filters on a projection of a srcTree=true root', () => {
+      tree = treeFromDisk(ROOT, true);
+
+      const projectedTree = tree.filtered({ include: [ '**/*.js' ] });
+
+      tree.reread();
+
+      projectedTree.include = [ '**/*.txt' ];
+
+      expect(sanitizeChanges(projectedTree.changes())).to.deep.equal(sanitizeChanges([
+        ['unlink', 'omg.js'],
+        ['create', 'hello.txt'],
+        ['mkdir', 'my-directory/'],
+        ['create', 'my-directory/goodbye.txt'],
+      ]));
+    });
+
     describe('srcTree is true', function() {
       beforeEach(function() {
         rimraf.sync(ROOT);
@@ -2146,6 +2514,7 @@ describe('FSTree fs abstraction', function() {
       it('include filters with nested symlinked dir and cwd', function() {
         const rootedTree = tree.chdir('b');
 
+        debugger;
         tree2.symlinkSyncFromEntry(rootedTree, '', 'c');
         tree2.include = ['c/four.txt']
 
@@ -2271,6 +2640,23 @@ describe('FSTree fs abstraction', function() {
           ['rmdir', 'a/b/c'],
           ['rmdir', 'a/b'],
           ['rmdir', 'a'],
+        ]));
+      });
+
+      it('sorts removals above additions/updates', () => {
+        tree.writeFileSync('a/b/c/foo.txt', 'foo');
+
+        tree.stop();
+        tree.start();
+
+        tree.writeFileSync('a/b/c/foo.txt', 'foo again');
+        tree.writeFileSync('a/b/c/bar.txt', 'bar');
+        tree.unlinkSync('a/b/c/d.txt');
+
+        expect(sanitizeChanges(tree.changes())).to.deep.equal(sanitizeChanges([
+          ['unlink', 'a/b/c/d.txt'],
+          ['create', 'a/b/c/bar.txt'],
+          ['change', 'a/b/c/foo.txt'],
         ]));
       });
     });

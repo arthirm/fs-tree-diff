@@ -1,7 +1,5 @@
 'use strict';
 
-const merge = require('lodash.merge');
-
 const Entry = require('../../lib/entry');
 
 module.exports.MockEntry = function(options) {
@@ -21,16 +19,14 @@ module.exports.MockEntry = function(options) {
 
 module.exports.MockEntry.prototype = Entry.prototype;
 
-
-
 module.exports.file = function(relativePath, options) {
-  return module.exports.entry(merge({ relativePath: relativePath }, options));
+  return module.exports.entry(Object.assign({ relativePath: relativePath }, options));
 };
 
 module.exports.directory = function(relativePath, options) {
-  return module.exports.entry(merge({
+  return module.exports.entry(Object.assign({
     relativePath: relativePath,
-    mode: 16877
+    mode: 0o40777
   }, options));
 };
 

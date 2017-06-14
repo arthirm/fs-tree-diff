@@ -6,16 +6,13 @@ const util = require('../lib/util');
 const treeOptionHelpers = require('../lib/tree-option-helpers');
 
 const entryRelativePath = util.entryRelativePath;
-const lchompPathStart = util.lchompPathStart;
 const commonPrefix = util.commonPrefix;
 const basename = util.basename;
+const compareChanges = util.compareChanges;
 const computeImpliedEntries = treeOptionHelpers.computeImpliedEntries;
 const sortAndExpand = treeOptionHelpers.sortAndExpand;
-const isDirectory = Entry.isDirectory;
-const isFile = Entry.isFile;
 
 require('chai').config.truncateThreshold = 0;
-
 
 describe('util', function() {
   const originalNow = Date.now;
@@ -122,6 +119,49 @@ describe('util', function() {
       expect(
         entryRelativePath(new Entry('my-path\\', 0, 0, Entry.DIRECTORY_MODE))
       ).to.eql('my-path');
+    });
+  });
+
+  describe('.compareChanges', () => {
+    it('sorts remove operations together', () => {
+      expect(compareChanges(['rmdir', ''], ['rmdir', ''])).to.equal(0);
+      expect(compareChanges(['rmdir', ''], ['unlink', ''])).to.equal(0);
+      expect(compareChanges(['unlink', ''], ['rmdir', ''])).to.equal(0);
+      expect(compareChanges(['unlink', ''], ['unlink', ''])).to.equal(0);
+    });
+
+    it('sorts add/update operations together', () => {
+      expect(compareChanges(['change', ''], ['change', ''])).to.equal(0);
+      expect(compareChanges(['change', ''], ['create', ''])).to.equal(0);
+      expect(compareChanges(['change', ''], ['mkdir', ''])).to.equal(0);
+      expect(compareChanges(['create', ''], ['change', ''])).to.equal(0);
+      expect(compareChanges(['create', ''], ['create', ''])).to.equal(0);
+      expect(compareChanges(['create', ''], ['mkdir', ''])).to.equal(0);
+      expect(compareChanges(['mkdir', ''], ['change', ''])).to.equal(0);
+      expect(compareChanges(['mkdir', ''], ['create', ''])).to.equal(0);
+      expect(compareChanges(['mkdir', ''], ['mkdir', ''])).to.equal(0);
+    });
+
+    it('sorts remove operations above add/update operations', () => {
+      expect(compareChanges(['rmdir', ''], ['mkdir', ''])).to.equal(-1);
+      expect(compareChanges(['mkdir', ''], ['rmdir', ''])).to.equal(1);
+    });
+
+    it('sorts remove operations in reverse lexicographic order', () => {
+      expect(compareChanges(['rmdir', 'a'], ['rmdir', 'b'])).to.equal(1);
+      expect(compareChanges(['rmdir', 'b'], ['rmdir', 'a'])).to.equal(-1);
+    });
+
+    it('sorts add/update operations in lexicographic order', () => {
+      expect(compareChanges(['mkdir', 'a'], ['mkdir', 'b'])).to.equal(-1);
+      expect(compareChanges(['mkdir', 'b'], ['mkdir', 'a'])).to.equal(1);
+    });
+
+    it('sorts by operation before path', () => {
+      expect(compareChanges(['rmdir', 'a'], ['mkdir', 'b'])).to.equal(-1);
+      expect(compareChanges(['rmdir', 'b'], ['mkdir', 'a'])).to.equal(-1);
+      expect(compareChanges(['mkdir', 'a'], ['rmdir', 'b'])).to.equal(1);
+      expect(compareChanges(['mkdir', 'b'], ['rmdir', 'a'])).to.equal(1);
     });
   });
 });

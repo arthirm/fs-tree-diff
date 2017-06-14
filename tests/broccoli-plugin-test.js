@@ -3,7 +3,6 @@ var FSTree = require('../');
 var mapSeries = require('promise-map-series')
 var expect = require('chai').expect;
 var Plugin = require('broccoli-plugin');
-var merge = require('lodash.merge');
 var Builder = require('broccoli-builder').Builder;
 var fixturify = require('fixturify');
 var fs = require('fs-extra');
@@ -255,7 +254,6 @@ describe('BroccoliPlugins', function() {
     return builder.build().then(function(result) {
       // expect(a._inWasPolyfilled).to.eql(true);
       // expect(b._inWasPolyfilled).to.eql(false);
-      debugger;
       expect(fs.readFileSync(result.directory + '/input.txt', 'UTF8')).to.eql('hello, world!')
    // });
       var changes = a.out.changes();

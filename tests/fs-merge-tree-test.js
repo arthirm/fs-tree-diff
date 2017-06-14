@@ -472,5 +472,42 @@ describe('FSMergeTree', function () {
       expect(changes).to.have.deep.property('0.1', 'index');
       expect(changes).to.have.deep.property('0.2.linkDir', true);
     });
+
+    it('handles linkDir changing between one call and the next', () => {
+      fixturify.writeSync(ROOT, {
+        in1: {
+          foo: {
+            bar: 'bar',
+          },
+        },
+        in2: {},
+      });
+
+      const inTree1 = treeFromDisk(path.join(ROOT, 'in1'));
+      const inTree2 = treeFromDisk(path.join(ROOT, 'in2'));
+
+      const mergedTree = new FSMergeTree({
+        inputs: [inTree1, inTree2],
+      });
+
+      let changes = mergedTree.changes();
+
+      expect(changes).to.have.length(1);
+      expect(changes).to.have.deep.property('0.0', 'mkdir');
+      expect(changes).to.have.deep.property('0.1', 'foo');
+      expect(changes).to.have.deep.property('0.2.linkDir', true);
+
+      inTree2.mkdirSync('foo');
+      inTree2.writeFileSync('foo/baz', 'baz');
+
+      changes = mergedTree.changes();
+
+      expect(changes).to.have.length(3);
+      expect(changes.map(change => change[1])).to.deep.equal([
+        'foo',
+        'foo/bar',
+        'foo/baz',
+      ]);
+    });
   });
 });
