@@ -40,7 +40,8 @@
     "md5sum": "^0.9.0",
     "mocha": "^2.3.3",
     "promise-map-series": "^0.2.3",
-    "rsvp": "^3.2.1"
+    "rsvp": "^3.2.1",
+    "sinon": "^2.3.6"
   },
   "repository": {
     "type": "git",
